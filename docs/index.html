@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Reisadviezenchecker (browserversie)</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --border: #dde1e6; --text: #1c1f24;
+  --muted: #5c6470; --accent: #1a56db;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+.app { display: flex; min-height: 100vh; flex-wrap: wrap; }
+.sidebar { width: 300px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; }
+.sidebar h1 { font-size: 1.25rem; margin: 0 0 4px; }
+.subtitle { margin: 0 0 16px; color: var(--muted); font-size: 0.85rem; }
+.banner { background: #eaf1ff; border: 1px solid #b6cdfa; color: #1a3a7a; font-size: 0.8rem; padding: 10px 12px; border-radius: 8px; margin: 16px 40px 0; max-width: 900px; }
+#search { padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; margin-bottom: 12px; }
+.country-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; max-height: 80vh; }
+.country-list li button { width: 100%; text-align: left; padding: 8px 10px; border: none; background: transparent; border-radius: 6px; cursor: pointer; font-size: 0.95rem; color: var(--text); }
+.country-list li button:hover { background: #eef1f5; }
+.country-list li button.active { background: var(--accent); color: white; }
+.content { flex: 1; padding: 20px 40px 40px; overflow-y: auto; min-width: 320px; }
+.empty-state { color: var(--muted); max-width: 480px; margin-top: 40px; font-size: 1.05rem; }
+.result[hidden], .empty-state[hidden] { display: none; }
+.result-header { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; margin-top: 16px; }
+.result-header h2 { margin: 0; }
+#refresh { border: 1px solid var(--border); background: var(--panel); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; }
+#refresh:hover { background: #eef1f5; }
+.disclaimer { color: var(--muted); font-size: 0.82rem; max-width: 780px; margin: 0 0 24px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 10px; }
+.card-title { font-weight: 600; font-size: 0.95rem; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: white; white-space: nowrap; }
+.badge.green { background: #2e7d32; } .badge.yellow { background: #b8860b; }
+.badge.orange { background: #e05a00; } .badge.red { background: #c62828; } .badge.gray { background: #6b7280; }
+.card .level { font-weight: 600; margin: 4px 0; }
+.card .updated { color: var(--muted); font-size: 0.82rem; margin-bottom: 8px; }
+.card .summary { font-size: 0.88rem; color: #333; margin-bottom: 10px; line-height: 1.4; }
+.card .source-link { font-size: 0.82rem; }
+.card.error, .card.not_found { background: #fbf7ee; }
+.card .error-text { color: #8a5300; font-size: 0.85rem; margin-bottom: 8px; }
+.card .confidence-note { font-size: 0.75rem; color: var(--muted); font-style: italic; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <h1>Reisadviezen&shy;checker</h1>
+      <p class="subtitle">Vergelijk het reisadvies van meerdere landen</p>
+      <input id="search" type="search" placeholder="Zoek een land…" aria-label="Zoek een land" />
+      <ul id="country-list" class="country-list" role="listbox" aria-label="Landen"></ul>
+    </aside>
+    <main class="content">
+      <div class="banner">
+        Deze versie werkt direct in je browser, zonder installatie of server. Sommige overheidssites
+        staan geen rechtstreekse verbinding vanuit een browser toe (beveiliging van die site, geen fout
+        in deze tool) — je ziet dat dan als "kon niet automatisch worden opgehaald" met een link om het
+        zelf te checken.
+      </div>
+      <div id="empty-state" class="empty-state">
+        <p>Kies links een land om de reisadviezen van Nederland, Duitsland, België, het VK en de VS naast elkaar te zien.</p>
+      </div>
+      <div id="result" class="result" hidden>
+        <header class="result-header">
+          <h2 id="result-title"></h2>
+          <button id="refresh" type="button" title="Opnieuw ophalen">↻ Vernieuwen</button>
+        </header>
+        <p class="disclaimer">
+          Controleer bij twijfel altijd de originele bron via de link op elke kaart.
+        </p>
+        <div id="cards" class="cards"></div>
+      </div>
+    </main>
+  </div>
+
+<script>
+'use strict';
+
+/* ---------- Landenlijst (zelfde als de servertool) ---------- */
+const COUNTRIES = [
+  { id: 'belgie', name_nl: 'België', name_en: 'Belgium', name_de: 'Belgien' },
+  { id: 'duitsland', name_nl: 'Duitsland', name_en: 'Germany', name_de: 'Deutschland' },
+  { id: 'frankrijk', name_nl: 'Frankrijk', name_en: 'France', name_de: 'Frankreich' },
+  { id: 'spanje', name_nl: 'Spanje', name_en: 'Spain', name_de: 'Spanien' },
+  { id: 'italie', name_nl: 'Italië', name_en: 'Italy', name_de: 'Italien' },
+  { id: 'portugal', name_nl: 'Portugal', name_en: 'Portugal', name_de: 'Portugal' },
+  { id: 'griekenland', name_nl: 'Griekenland', name_en: 'Greece', name_de: 'Griechenland' },
+  { id: 'verenigd-koninkrijk', name_nl: 'Verenigd Koninkrijk', name_en: 'United Kingdom', name_de: 'Vereinigtes Königreich', aliases: ['VK', 'UK', 'Groot-Brittannië'] },
+  { id: 'ierland', name_nl: 'Ierland', name_en: 'Ireland', name_de: 'Irland' },
+  { id: 'oostenrijk', name_nl: 'Oostenrijk', name_en: 'Austria', name_de: 'Österreich' },
+  { id: 'zwitserland', name_nl: 'Zwitserland', name_en: 'Switzerland', name_de: 'Schweiz' },
+  { id: 'polen', name_nl: 'Polen', name_en: 'Poland', name_de: 'Polen' },
+  { id: 'tsjechie', name_nl: 'Tsjechië', name_en: 'Czechia', name_de: 'Tschechien', aliases: ['Czech Republic', 'Tsjechische Republiek'] },
+  { id: 'hongarije', name_nl: 'Hongarije', name_en: 'Hungary', name_de: 'Ungarn' },
+  { id: 'kroatie', name_nl: 'Kroatië', name_en: 'Croatia', name_de: 'Kroatien' },
+  { id: 'slovenie', name_nl: 'Slovenië', name_en: 'Slovenia', name_de: 'Slowenien' },
+  { id: 'denemarken', name_nl: 'Denemarken', name_en: 'Denmark', name_de: 'Dänemark' },
+  { id: 'zweden', name_nl: 'Zweden', name_en: 'Sweden', name_de: 'Schweden' },
+  { id: 'noorwegen', name_nl: 'Noorwegen', name_en: 'Norway', name_de: 'Norwegen' },
+  { id: 'finland', name_nl: 'Finland', name_en: 'Finland', name_de: 'Finnland' },
+  { id: 'ijsland', name_nl: 'IJsland', name_en: 'Iceland', name_de: 'Island' },
+  { id: 'luxemburg', name_nl: 'Luxemburg', name_en: 'Luxembourg', name_de: 'Luxemburg' },
+  { id: 'malta', name_nl: 'Malta', name_en: 'Malta', name_de: 'Malta' },
+  { id: 'cyprus', name_nl: 'Cyprus', name_en: 'Cyprus', name_de: 'Zypern' },
+  { id: 'roemenie', name_nl: 'Roemenië', name_en: 'Romania', name_de: 'Rumänien' },
+  { id: 'bulgarije', name_nl: 'Bulgarije', name_en: 'Bulgaria', name_de: 'Bulgarien' },
+  { id: 'slowakije', name_nl: 'Slowakije', name_en: 'Slovakia', name_de: 'Slowakei' },
+  { id: 'servie', name_nl: 'Servië', name_en: 'Serbia', name_de: 'Serbien' },
+  { id: 'albanie', name_nl: 'Albanië', name_en: 'Albania', name_de: 'Albanien' },
+  { id: 'montenegro', name_nl: 'Montenegro', name_en: 'Montenegro', name_de: 'Montenegro' },
+  { id: 'oekraine', name_nl: 'Oekraïne', name_en: 'Ukraine', name_de: 'Ukraine' },
+  { id: 'wit-rusland', name_nl: 'Wit-Rusland', name_en: 'Belarus', name_de: 'Weißrussland', aliases: ['Belarus'] },
+  { id: 'rusland', name_nl: 'Rusland', name_en: 'Russia', name_de: 'Russland' },
+  { id: 'turkije', name_nl: 'Turkije', name_en: 'Turkey', name_de: 'Türkei', aliases: ['Türkiye'] },
+  { id: 'marokko', name_nl: 'Marokko', name_en: 'Morocco', name_de: 'Marokko' },
+  { id: 'tunesie', name_nl: 'Tunesië', name_en: 'Tunisia', name_de: 'Tunesien' },
+  { id: 'egypte', name_nl: 'Egypte', name_en: 'Egypt', name_de: 'Ägypten' },
+  { id: 'zuid-afrika', name_nl: 'Zuid-Afrika', name_en: 'South Africa', name_de: 'Südafrika' },
+  { id: 'kenia', name_nl: 'Kenia', name_en: 'Kenya', name_de: 'Kenia' },
+  { id: 'verenigde-staten', name_nl: 'Verenigde Staten', name_en: 'United States', name_de: 'Vereinigte Staaten', aliases: ['VS', 'Amerika', 'USA'] },
+  { id: 'canada', name_nl: 'Canada', name_en: 'Canada', name_de: 'Kanada' },
+  { id: 'mexico', name_nl: 'Mexico', name_en: 'Mexico', name_de: 'Mexiko' },
+  { id: 'brazilie', name_nl: 'Brazilië', name_en: 'Brazil', name_de: 'Brasilien' },
+  { id: 'argentinie', name_nl: 'Argentinië', name_en: 'Argentina', name_de: 'Argentinien' },
+  { id: 'peru', name_nl: 'Peru', name_en: 'Peru', name_de: 'Peru' },
+  { id: 'chili', name_nl: 'Chili', name_en: 'Chile', name_de: 'Chile' },
+  { id: 'colombia', name_nl: 'Colombia', name_en: 'Colombia', name_de: 'Kolumbien' },
+  { id: 'cuba', name_nl: 'Cuba', name_en: 'Cuba', name_de: 'Kuba' },
+  { id: 'dominicaanse-republiek', name_nl: 'Dominicaanse Republiek', name_en: 'Dominican Republic', name_de: 'Dominikanische Republik' },
+  { id: 'jamaica', name_nl: 'Jamaica', name_en: 'Jamaica', name_de: 'Jamaika' },
+  { id: 'suriname', name_nl: 'Suriname', name_en: 'Suriname', name_de: 'Suriname' },
+  { id: 'china', name_nl: 'China', name_en: 'China', name_de: 'China' },
+  { id: 'japan', name_nl: 'Japan', name_en: 'Japan', name_de: 'Japan' },
+  { id: 'zuid-korea', name_nl: 'Zuid-Korea', name_en: 'South Korea', name_de: 'Südkorea' },
+  { id: 'india', name_nl: 'India', name_en: 'India', name_de: 'Indien' },
+  { id: 'thailand', name_nl: 'Thailand', name_en: 'Thailand', name_de: 'Thailand' },
+  { id: 'vietnam', name_nl: 'Vietnam', name_en: 'Vietnam', name_de: 'Vietnam' },
+  { id: 'indonesie', name_nl: 'Indonesië', name_en: 'Indonesia', name_de: 'Indonesien' },
+  { id: 'maleisie', name_nl: 'Maleisië', name_en: 'Malaysia', name_de: 'Malaysia' },
+  { id: 'filipijnen', name_nl: 'Filipijnen', name_en: 'Philippines', name_de: 'Philippinen' },
+  { id: 'sri-lanka', name_nl: 'Sri Lanka', name_en: 'Sri Lanka', name_de: 'Sri Lanka' },
+  { id: 'nepal', name_nl: 'Nepal', name_en: 'Nepal', name_de: 'Nepal' },
+  { id: 'israel', name_nl: 'Israël', name_en: 'Israel', name_de: 'Israel' },
+  { id: 'libanon', name_nl: 'Libanon', name_en: 'Lebanon', name_de: 'Libanon' },
+  { id: 'jordanie', name_nl: 'Jordanië', name_en: 'Jordan', name_de: 'Jordanien' },
+  { id: 'verenigde-arabische-emiraten', name_nl: 'Verenigde Arabische Emiraten', name_en: 'United Arab Emirates', name_de: 'Vereinigte Arabische Emirate', aliases: ['VAE', 'Dubai'] },
+  { id: 'saoedi-arabie', name_nl: 'Saoedi-Arabië', name_en: 'Saudi Arabia', name_de: 'Saudi-Arabien' },
+  { id: 'qatar', name_nl: 'Qatar', name_en: 'Qatar', name_de: 'Katar' },
+  { id: 'iran', name_nl: 'Iran', name_en: 'Iran', name_de: 'Iran' },
+  { id: 'irak', name_nl: 'Irak', name_en: 'Iraq', name_de: 'Irak' },
+  { id: 'afghanistan', name_nl: 'Afghanistan', name_en: 'Afghanistan', name_de: 'Afghanistan' },
+  { id: 'pakistan', name_nl: 'Pakistan', name_en: 'Pakistan', name_de: 'Pakistan' },
+  { id: 'oezbekistan', name_nl: 'Oezbekistan', name_en: 'Uzbekistan', name_de: 'Usbekistan' },
+  { id: 'georgie', name_nl: 'Georgië', name_en: 'Georgia', name_de: 'Georgien' },
+  { id: 'armenie', name_nl: 'Armenië', name_en: 'Armenia', name_de: 'Armenien' },
+  { id: 'azerbeidzjan', name_nl: 'Azerbeidzjan', name_en: 'Azerbaijan', name_de: 'Aserbaidschan' },
+  { id: 'nigeria', name_nl: 'Nigeria', name_en: 'Nigeria', name_de: 'Nigeria' },
+  { id: 'ethiopie', name_nl: 'Ethiopië', name_en: 'Ethiopia', name_de: 'Äthiopien' },
+  { id: 'tanzania', name_nl: 'Tanzania', name_en: 'Tanzania', name_de: 'Tansania' },
+  { id: 'oeganda', name_nl: 'Oeganda', name_en: 'Uganda', name_de: 'Uganda' },
+  { id: 'ghana', name_nl: 'Ghana', name_en: 'Ghana', name_de: 'Ghana' },
+  { id: 'senegal', name_nl: 'Senegal', name_en: 'Senegal', name_de: 'Senegal' },
+  { id: 'algerije', name_nl: 'Algerije', name_en: 'Algeria', name_de: 'Algerien' },
+  { id: 'libie', name_nl: 'Libië', name_en: 'Libya', name_de: 'Libyen' },
+  { id: 'australie', name_nl: 'Australië', name_en: 'Australia', name_de: 'Australien' },
+  { id: 'nieuw-zeeland', name_nl: 'Nieuw-Zeeland', name_en: 'New Zealand', name_de: 'Neuseeland' },
+];
+
+function normalize(str) {
+  return String(str)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\b(the|de|het|republic of|republiek|kingdom of|koninkrijk van)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* ---------- Kleine hulpfuncties (zelfde logica als de servertool) ---------- */
+function deepFindByKey(node, keyPattern, { depth = 5, valueType = null } = {}) {
+  const results = [];
+  (function walk(current, level) {
+    if (current == null || level > depth) return;
+    if (Array.isArray(current)) { current.forEach((item) => walk(item, level + 1)); return; }
+    if (typeof current === 'object') {
+      for (const [key, value] of Object.entries(current)) {
+        if (keyPattern.test(key) && (!valueType || typeof value === valueType)) results.push({ key, value });
+        walk(value, level + 1);
+      }
+    }
+  })(node, 0);
+  return results;
+}
+
+function stripHtml(html) {
+  if (!html) return '';
+  return html.replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ').trim();
+}
+
+function truncate(text, maxLength = 400) {
+  if (!text) return text;
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength).trim()}…`;
+}
+
+function toIsoDate(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') {
+    const date = new Date(value > 1e12 ? value : value * 1000);
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+async function fetchWithTimeout(url, { timeoutMs = 10000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json, text/xml, text/html, */*' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function friendlyFetchError(err, url) {
+  const isNetworkish = err.name === 'TypeError' || /failed to fetch|networkerror|load failed/i.test(err.message || '');
+  const hint = isNetworkish
+    ? ' (waarschijnlijk geblokkeerd door de browser vanwege CORS-beveiliging, of geen verbinding — geen bug in deze tool)'
+    : '';
+  return `Kon ${url} niet ophalen: ${err.message}${hint}`;
+}
+
+function makeResult({ source, sourceName, status, level = null, levelKind = null, lastUpdated = null, summary = null, sourceUrl = null, error = null, confidence = 'high' }) {
+  return { source, sourceName, status, level, levelKind, lastUpdated, summary, sourceUrl, error, confidence, fetchedAt: new Date().toISOString() };
+}
+
+/* ---------- Bron: Nederland ---------- */
+async function getAdvisoryNL(country) {
+  const publicUrl = `https://www.nederlandwereldwijd.nl/reisadvies/${country.id}`;
+  const apiUrl = `https://opendata.nederlandwereldwijd.nl/v2/sources/nederlandwereldwijd/infotypes/countries/${country.id}/traveladvice`;
+  const SOURCE = 'nl', SOURCE_NAME = 'Nederland (NederlandWereldwijd)';
+  let data;
+  try {
+    data = JSON.parse(await fetchWithTimeout(apiUrl));
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: publicUrl, error: friendlyFetchError(err, 'de NL open-data feed') });
+  }
+  const colorMatch = deepFindByKey(data, /kleur|colou?r/i, { valueType: 'string' }).find((m) => /groen|geel|oranje|rood|green|yellow|orange|red/i.test(m.value));
+  const dateMatches = deepFindByKey(data, /gewijzigd|modified|updated|datum|date/i);
+  const summaryMatches = deepFindByKey(data, /samenvatting|summary|inleiding|omschrijving|description/i, { valueType: 'string' }).filter((m) => m.value && m.value.length > 30);
+  if (!colorMatch && summaryMatches.length === 0) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: publicUrl, error: 'Geen kleurcode of tekst herkend in het antwoord.' });
+  }
+  const lastUpdated = dateMatches.map((m) => toIsoDate(m.value)).find(Boolean) || null;
+  return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'ok', level: colorMatch ? colorMatch.value : null, levelKind: 'color', lastUpdated, summary: summaryMatches.length ? truncate(summaryMatches[0].value) : null, sourceUrl: publicUrl, confidence: colorMatch ? 'high' : 'medium' });
+}
+
+/* ---------- Bron: Duitsland ---------- */
+let deListCache = null;
+async function getDeList() {
+  if (deListCache) return deListCache;
+  const data = JSON.parse(await fetchWithTimeout('https://www.auswaertiges-amt.de/opendata/travelwarning'));
+  const response = data && data.response;
+  if (!response) throw new Error('Onverwachte structuur (geen "response" object).');
+  const ids = Array.isArray(response.contentList) ? response.contentList : Object.keys(response).filter((k) => k !== 'contentList');
+  deListCache = ids.map((id) => ({ id, ...response[id] })).filter((e) => e.CountryName);
+  return deListCache;
+}
+async function getAdvisoryDE(country) {
+  const SOURCE = 'de', SOURCE_NAME = 'Duitsland (Auswärtiges Amt)';
+  const overviewUrl = 'https://www.auswaertiges-amt.de/de/reiseundsicherheit/reise-und-sicherheitshinweise';
+  let list;
+  try {
+    list = await getDeList();
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: overviewUrl, error: friendlyFetchError(err, 'de Duitse open-data feed') });
+  }
+  const target = normalize(country.name_de);
+  const entry = list.find((e) => normalize(e.CountryName) === target);
+  if (!entry) return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'not_found', sourceUrl: overviewUrl, error: `${country.name_de} niet gevonden.` });
+  const flags = [];
+  if (entry.warning) flags.push('Reiswaarschuwing (volledig land)');
+  if (entry.partialWarning) flags.push('Gedeeltelijke reiswaarschuwing');
+  if (entry.situationWarning) flags.push('Situatieve waarschuwing (bv. gezondheid)');
+  if (entry.situationPartWarning) flags.push('Gedeeltelijke situatieve waarschuwing');
+  let summary = null;
+  try {
+    const detail = JSON.parse(await fetchWithTimeout(`https://www.auswaertiges-amt.de/opendata/travelwarning/${entry.id}`));
+    const detailEntry = detail && detail.response && detail.response[entry.id];
+    if (detailEntry && detailEntry.content) summary = truncate(stripHtml(detailEntry.content));
+  } catch (err) { /* detail is optioneel */ }
+  return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'ok', level: flags.length ? flags.join('; ') : 'Geen reiswaarschuwing van kracht', levelKind: 'boolean_flags', lastUpdated: toIsoDate(entry.lastModified), summary, sourceUrl: overviewUrl });
+}
+
+/* ---------- Bron: Verenigd Koninkrijk ---------- */
+let ukListCache = null;
+async function getUkList() {
+  if (ukListCache) return ukListCache;
+  const data = JSON.parse(await fetchWithTimeout('https://www.gov.uk/api/search.json?filter_format=travel_advice&count=1000&fields=title,link'));
+  const results = Array.isArray(data && data.results) ? data.results : [];
+  ukListCache = results.filter((r) => typeof r.link === 'string' && r.link.startsWith('/foreign-travel-advice/'));
+  return ukListCache;
+}
+const ALERT_STATUS_LABELS = {
+  avoid_all_travel_to_whole_country: 'Ontraad alle reizen naar het hele land',
+  avoid_all_travel_to_parts_of_country: 'Ontraad alle reizen naar delen van het land',
+  avoid_all_but_essential_travel_to_whole_country: 'Ontraad niet-essentiële reizen naar het hele land',
+  avoid_all_but_essential_travel_to_parts_of_country: 'Ontraad niet-essentiële reizen naar delen van het land',
+};
+async function getAdvisoryUK(country) {
+  const SOURCE = 'uk', SOURCE_NAME = 'Verenigd Koninkrijk (GOV.UK / FCDO)';
+  const overviewUrl = 'https://www.gov.uk/foreign-travel-advice';
+  let list;
+  try {
+    list = await getUkList();
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: overviewUrl, error: friendlyFetchError(err, 'de GOV.UK landenlijst') });
+  }
+  const candidates = [country.name_en, ...(country.aliases || [])];
+  let basePath = null;
+  for (const item of list) {
+    if (candidates.some((name) => normalize(name) === normalize(item.title))) { basePath = item.link; break; }
+  }
+  if (!basePath) return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'not_found', sourceUrl: overviewUrl, error: `${country.name_en} niet gevonden in de GOV.UK lijst.` });
+  const publicUrl = `https://www.gov.uk${basePath}`;
+  let data;
+  try {
+    data = JSON.parse(await fetchWithTimeout(`https://www.gov.uk/api/content${basePath}`));
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: publicUrl, error: friendlyFetchError(err, 'de GOV.UK content-API') });
+  }
+  const details = data && data.details ? data.details : {};
+  const alertStatus = Array.isArray(details.alert_status) ? details.alert_status : [];
+  const level = alertStatus.length ? alertStatus.map((s) => ALERT_STATUS_LABELS[s] || s.replace(/_/g, ' ')).join('; ') : 'Geen actief reiswaarschuwingsniveau (alert_status leeg)';
+  const parts = Array.isArray(details.parts) ? details.parts : [];
+  const summaryPart = parts.find((p) => /summary/i.test(p.slug || p.title || '')) || parts[0];
+  const summary = summaryPart ? truncate(stripHtml(summaryPart.body)) : null;
+  const lastUpdated = data.public_updated_at || data.updated_at || null;
+  return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'ok', level, levelKind: 'alert_status', lastUpdated: lastUpdated ? new Date(lastUpdated).toISOString() : null, summary, sourceUrl: publicUrl });
+}
+
+/* ---------- Bron: Verenigde Staten ---------- */
+let usItemsCache = null;
+async function getUsItems() {
+  if (usItemsCache) return usItemsCache;
+  const xmlText = await fetchWithTimeout('https://travel.state.gov/_res/rss/TAsTWs.xml');
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Kon de RSS-feed niet parsen.');
+  const items = Array.from(doc.querySelectorAll('item'));
+  if (!items.length) throw new Error('Geen <item> elementen gevonden in de feed.');
+  usItemsCache = items.map((el) => ({
+    title: el.querySelector('title')?.textContent || '',
+    link: el.querySelector('link')?.textContent || '',
+    pubDate: el.querySelector('pubDate')?.textContent || '',
+    description: el.querySelector('description')?.textContent || '',
+  }));
+  return usItemsCache;
+}
+async function getAdvisoryUS(country) {
+  const SOURCE = 'us', SOURCE_NAME = 'Verenigde Staten (U.S. Department of State)';
+  const overviewUrl = 'https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories.html/';
+  let items;
+  try {
+    items = await getUsItems();
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: overviewUrl, error: friendlyFetchError(err, 'de travel.state.gov RSS-feed') });
+  }
+  const names = [country.name_en, ...(country.aliases || [])].map((n) => normalize(n));
+  const item = items.find((it) => {
+    const t = normalize(it.title);
+    return names.some((name) => name && (t.startsWith(name) || t.includes(` ${name} `) || t.includes(`${name} travel`)));
+  });
+  if (!item) return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'not_found', sourceUrl: overviewUrl, error: `${country.name_en} niet gevonden in de feed.` });
+  const levelMatch = item.title.match(/level\s*(\d)\s*:?\s*([^|]*)/i);
+  const level = levelMatch ? `Level ${levelMatch[1]}${levelMatch[2] ? `: ${levelMatch[2].trim()}` : ''}` : item.title;
+  const pubDate = item.pubDate ? new Date(item.pubDate) : null;
+  return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'ok', level, levelKind: 'level', lastUpdated: pubDate && !Number.isNaN(pubDate.getTime()) ? pubDate.toISOString() : null, summary: item.description ? truncate(stripHtml(item.description)) : null, sourceUrl: item.link || overviewUrl });
+}
+
+/* ---------- Bron: België (scraping, minst betrouwbaar) ---------- */
+let beLinksCache = null;
+async function getBeLinks() {
+  if (beLinksCache) return beLinksCache;
+  const html = await fetchWithTimeout('https://diplomatie.belgium.be/nl/landen');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const links = Array.from(doc.querySelectorAll('a[href^="/nl/landen/"]'))
+    .map((a) => ({ text: a.textContent.trim(), href: a.getAttribute('href') }))
+    .filter((l) => l.href && l.text && /^\/nl\/landen\/[a-z0-9-]+\/?$/i.test(l.href));
+  if (!links.length) throw new Error('Geen landenlinks gevonden op de landenpagina.');
+  beLinksCache = links;
+  return links;
+}
+const MONTHS = 'januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december';
+const DATE_NEAR_KEYWORD_RE = new RegExp(`(laatst\\s+bijgewerkt|laatste\\s+update|bijgewerkt\\s+op|gewijzigd\\s+op|van\\s+kracht\\s+sinds)[^\\d]{0,20}(\\d{1,2}\\s+(?:${MONTHS})\\s+\\d{4}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{4})`, 'i');
+const PHASE_RE = /fase\s*([0-4])\b/i;
+function findAdviceLink(doc, base) {
+  const a = Array.from(doc.querySelectorAll('a')).find((el) => /reisadvies/i.test(el.textContent || '') || /reisadvies/i.test(el.getAttribute('href') || ''));
+  if (!a) return null;
+  const href = a.getAttribute('href') || '';
+  return href.startsWith('http') ? href : new URL(href, base).toString();
+}
+async function getAdvisoryBE(country) {
+  const SOURCE = 'be', SOURCE_NAME = 'België (FOD Buitenlandse Zaken)';
+  const listUrl = 'https://diplomatie.belgium.be/nl/landen';
+  let links;
+  try {
+    links = await getBeLinks();
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: listUrl, error: friendlyFetchError(err, 'de Belgische landenlijst'), confidence: 'low' });
+  }
+  const target = normalize(country.name_nl);
+  const match = links.find((l) => normalize(l.text) === target);
+  if (!match) return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'not_found', sourceUrl: listUrl, error: `${country.name_nl} niet gevonden.`, confidence: 'low' });
+  const landingUrl = `https://diplomatie.belgium.be${match.href}`;
+  let landingHtml;
+  try {
+    landingHtml = await fetchWithTimeout(landingUrl);
+  } catch (err) {
+    return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: landingUrl, error: friendlyFetchError(err, 'de landenpagina'), confidence: 'low' });
+  }
+  const landingDoc = new DOMParser().parseFromString(landingHtml, 'text/html');
+  const adviceUrl = findAdviceLink(landingDoc, landingUrl) || landingUrl;
+  let pageHtml = landingHtml, pageUrl = landingUrl;
+  if (adviceUrl !== landingUrl) {
+    try { pageHtml = await fetchWithTimeout(adviceUrl); pageUrl = adviceUrl; } catch (err) { /* val terug op landingspagina */ }
+  }
+  const pageDoc = new DOMParser().parseFromString(pageHtml, 'text/html');
+  const text = (pageDoc.body ? pageDoc.body.textContent : '').replace(/\s+/g, ' ').trim();
+  const phaseMatch = text.match(PHASE_RE);
+  if (!phaseMatch) return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'error', sourceUrl: pageUrl, error: 'Kon geen "Fase" herkennen op de pagina.', confidence: 'low' });
+  const dateMatch = text.match(DATE_NEAR_KEYWORD_RE);
+  const start = Math.max(0, (phaseMatch.index || 0) - 40);
+  return makeResult({ source: SOURCE, sourceName: SOURCE_NAME, status: 'ok', level: `Fase ${phaseMatch[1]}`, levelKind: 'phase', lastUpdated: dateMatch ? dateMatch[2] : null, summary: truncate(text.slice(start, start + 300)), sourceUrl: pageUrl, confidence: 'low' });
+}
+
+/* ---------- UI ---------- */
+const SOURCES = [getAdvisoryNL, getAdvisoryDE, getAdvisoryBE, getAdvisoryUK, getAdvisoryUS];
+const countryListEl = document.getElementById('country-list');
+const searchEl = document.getElementById('search');
+const resultEl = document.getElementById('result');
+const emptyStateEl = document.getElementById('empty-state');
+const resultTitleEl = document.getElementById('result-title');
+const cardsEl = document.getElementById('cards');
+const refreshBtn = document.getElementById('refresh');
+let activeCountryId = null;
+const advisoryCache = new Map();
+
+function badgeColorFor(source) {
+  const text = (source.level || '').toLowerCase();
+  if (source.status !== 'ok') return 'gray';
+  if (source.levelKind === 'color') {
+    if (/groen|green/.test(text)) return 'green';
+    if (/geel|yellow/.test(text)) return 'yellow';
+    if (/oranje|orange/.test(text)) return 'orange';
+    if (/rood|red/.test(text)) return 'red';
+    return 'gray';
+  }
+  if (source.levelKind === 'level') {
+    if (/level\s*1/.test(text)) return 'green';
+    if (/level\s*2/.test(text)) return 'yellow';
+    if (/level\s*3/.test(text)) return 'orange';
+    if (/level\s*4/.test(text)) return 'red';
+    return 'gray';
+  }
+  if (source.levelKind === 'phase') {
+    const m = text.match(/fase\s*(\d)/);
+    const phase = m ? Number(m[1]) : null;
+    return { 0: 'green', 1: 'yellow', 2: 'orange', 3: 'orange', 4: 'red' }[phase] || 'gray';
+  }
+  if (source.levelKind === 'boolean_flags') {
+    if (/geen reiswaarschuwing/.test(text)) return 'green';
+    if (/gedeeltelijke/.test(text)) return 'orange';
+    if (/reiswaarschuwing \(volledig/.test(text)) return 'red';
+    return 'gray';
+  }
+  if (source.levelKind === 'alert_status') {
+    if (/geen actief/.test(text)) return 'green';
+    if (/niet-essentiële/.test(text)) return 'orange';
+    if (/alle reizen/.test(text)) return 'red';
+    return 'gray';
+  }
+  return 'gray';
+}
+
+function formatDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isNaN(date.getTime())) {
+    return date.toLocaleString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  return value;
+}
+
+function renderCard(source) {
+  const wrapper = document.createElement('div');
+  wrapper.className = `card ${source.status}`;
+  const header = document.createElement('div');
+  header.className = 'card-header';
+  const title = document.createElement('div');
+  title.className = 'card-title';
+  title.textContent = source.sourceName;
+  header.appendChild(title);
+  if (source.status === 'ok') {
+    const badge = document.createElement('span');
+    badge.className = `badge ${badgeColorFor(source)}`;
+    badge.textContent = 'OK';
+    header.appendChild(badge);
+  }
+  wrapper.appendChild(header);
+  if (source.status === 'ok') {
+    const level = document.createElement('div');
+    level.className = 'level';
+    level.textContent = source.level || 'Geen niveau gevonden';
+    wrapper.appendChild(level);
+    const updated = document.createElement('div');
+    updated.className = 'updated';
+    const formatted = formatDate(source.lastUpdated);
+    updated.textContent = formatted ? `Laatst bijgewerkt: ${formatted}` : 'Laatst bijgewerkt: onbekend';
+    wrapper.appendChild(updated);
+    if (source.confidence === 'low' || source.confidence === 'medium') {
+      const note = document.createElement('div');
+      note.className = 'confidence-note';
+      note.textContent = source.confidence === 'low'
+        ? 'Let op: automatisch van de webpagina gelezen, minder betrouwbaar dan een officiële feed.'
+        : 'Let op: niet alle velden konden met zekerheid worden herkend.';
+      wrapper.appendChild(note);
+    }
+    if (source.summary) {
+      const summary = document.createElement('div');
+      summary.className = 'summary';
+      summary.textContent = source.summary;
+      wrapper.appendChild(summary);
+    }
+  } else {
+    const err = document.createElement('div');
+    err.className = 'error-text';
+    err.textContent = source.error || 'Onbekende fout bij het ophalen van deze bron.';
+    wrapper.appendChild(err);
+  }
+  if (source.sourceUrl) {
+    const link = document.createElement('a');
+    link.className = 'source-link';
+    link.href = source.sourceUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = 'Bekijk originele bron ↗';
+    wrapper.appendChild(link);
+  }
+  return wrapper;
+}
+
+function highlightActiveCountry() {
+  countryListEl.querySelectorAll('button').forEach((btn) => btn.classList.toggle('active', btn.dataset.id === activeCountryId));
+}
+
+async function loadAdvisory(countryId, { force = false } = {}) {
+  activeCountryId = countryId;
+  highlightActiveCountry();
+  emptyStateEl.hidden = true;
+  resultEl.hidden = false;
+  const country = COUNTRIES.find((c) => c.id === countryId);
+  resultTitleEl.textContent = country ? country.name_nl : countryId;
+  cardsEl.innerHTML = '<p>Bezig met ophalen…</p>';
+
+  if (force) advisoryCache.delete(countryId);
+  if (advisoryCache.has(countryId)) {
+    cardsEl.innerHTML = '';
+    advisoryCache.get(countryId).forEach((s) => cardsEl.appendChild(renderCard(s)));
+    return;
+  }
+
+  const settled = await Promise.allSettled(SOURCES.map((fn) => fn(country)));
+  const results = settled.map((s, i) => (s.status === 'fulfilled' ? s.value : makeResult({
+    source: `bron-${i}`, sourceName: 'Onbekende bron', status: 'error', error: `Onverwachte fout: ${s.reason && s.reason.message}`,
+  })));
+  advisoryCache.set(countryId, results);
+  cardsEl.innerHTML = '';
+  results.forEach((s) => cardsEl.appendChild(renderCard(s)));
+}
+
+function renderCountryList(filter = '') {
+  const normalizedFilter = filter.trim().toLowerCase();
+  countryListEl.innerHTML = '';
+  COUNTRIES.filter((c) => c.name_nl.toLowerCase().includes(normalizedFilter)).forEach((c) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = c.name_nl;
+    btn.dataset.id = c.id;
+    btn.addEventListener('click', () => loadAdvisory(c.id));
+    li.appendChild(btn);
+    countryListEl.appendChild(li);
+  });
+  highlightActiveCountry();
+}
+
+searchEl.addEventListener('input', () => renderCountryList(searchEl.value));
+refreshBtn.addEventListener('click', () => { if (activeCountryId) loadAdvisory(activeCountryId, { force: true }); });
+renderCountryList();
+</script>
+</body>
+</html>

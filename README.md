@@ -6,7 +6,41 @@ Verenigde Staten. Je klikt links een land aan en ziet rechts per bron de
 kleurcode/fase/niveau, de laatste wijzigingsdatum en een korte samenvatting,
 met een link naar de originele pagina.
 
-## Starten
+Er zijn twee versies in deze repository:
+
+1. **`docs/index.html`** — werkt volledig in de browser, zonder installatie.
+   Dit is de makkelijkste optie als je niets op je laptop mag/kan
+   installeren. Zie "Zonder installatie gebruiken" hieronder. Nadeel:
+   sommige overheidssites blokkeren rechtstreekse verbindingen vanuit een
+   browser (CORS-beveiliging), waardoor die kaart dan "kon niet automatisch
+   worden opgehaald" toont in plaats van de gegevens zelf. Voor die landen
+   werkt de link op de kaart altijd wel.
+2. **`server/` + `public/`** — een Node.js-app die dezelfde gegevens ophaalt
+   via een server, waardoor CORS geen probleem is en alle bronnen
+   betrouwbaarder werken. Vereist dat iemand `npm install && npm start`
+   draait (zie "Met server draaien" hieronder) — handig om aan IT te vragen.
+
+## Zonder installatie gebruiken (aanbevolen als je niets mag installeren)
+
+**Optie A — meteen openen:** dubbelklik op `docs/index.html`. Die opent in je
+browser en werkt direct (in de meeste browsers; sommige browsers blokkeren
+uit voorzorg extra streng wanneer een bestand rechtstreeks vanaf schijf wordt
+geopend, dan werkt optie B beter).
+
+**Optie B — een echte link om te bookmarken (eenmalig instellen):**
+1. Ga naar de GitHub-pagina van deze repository, tabblad **Settings**.
+2. Ga naar **Pages** (linkermenu).
+3. Bij "Build and deployment" → **Source**: kies **Deploy from a branch**.
+4. Kies de branch `claude/logius-overhead-costs-owh4os` (of `main` zodra dit
+   daar staat) en map **/docs**. Klik **Save**.
+5. Na ongeveer een minuut verschijnt bovenaan een link zoals
+   `https://rinsesje.github.io/reisadviezenchecker/`. Die kun je bookmarken —
+   vanaf dan is het gewoon een website die je opent zoals elke andere.
+
+Dit is een eenmalige instelling van 3 klikken; er komt geen terminal of
+installatie aan te pas.
+
+## Met server draaien (betrouwbaarder, vraagt iets van IT)
 
 ```bash
 npm install
